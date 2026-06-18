@@ -180,7 +180,7 @@ function getAnuNekoConfig(): AnuNekoConfig {
       mode,
       baseUrl: getOptionalEnv("ANUNEKO_BASE_URL") ?? "https://anuneko.com",
       browserProfileDir:
-        getOptionalEnv("ANUNEKO_BROWSER_PROFILE_DIR") ?? ".anuneko-browser-profile",
+        getOptionalEnv("ANUNEKO_BROWSER_PROFILE_DIR") ?? ".anuneko-test-profile",
       browserHeadless: getOptionalBooleanEnv("ANUNEKO_BROWSER_HEADLESS", false),
       createChatBody: getOptionalJsonObjectEnv("ANUNEKO_CREATE_CHAT_BODY"),
       loginUrl: getOptionalEnv("ANUNEKO_LOGIN_URL"),

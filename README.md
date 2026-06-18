@@ -41,7 +41,7 @@ DISCORD_CLIENT_ID=your_discord_application_client_id
 
 ANUNEKO_MODE=browser
 ANUNEKO_BASE_URL=https://anuneko.com
-ANUNEKO_BROWSER_PROFILE_DIR=.anuneko-browser-profile
+ANUNEKO_BROWSER_PROFILE_DIR=.anuneko-test-profile
 ANUNEKO_BROWSER_HEADLESS=false
 ANUNEKO_CREATE_CHAT_BODY={"is_chose_persona":false}
 
@@ -64,7 +64,7 @@ Use this when running on your own machine:
 3. Log in to AnuNeko in the Chromium window that opens.
 4. Use `/neko-new` or `/neko-link` in Discord.
 
-The bot reuses `ANUNEKO_BROWSER_PROFILE_DIR` while that profile folder exists.
+The bot reuses `ANUNEKO_BROWSER_PROFILE_DIR` while that profile folder exists. For local development, you can point this at `.anuneko-browser-profile` instead of the committed `.anuneko-test-profile`.
 
 ## Railway Notes
 
@@ -89,7 +89,9 @@ ANUNEKO_LOGIN_ID_FIELD=email
 ANUNEKO_PASSWORD_FIELD=password
 ```
 
-If the login endpoint or field names are different, update those values before deploying. Railway's filesystem may be temporary unless you add a volume, so do not rely on the browser profile always surviving redeploys.
+If the login endpoint or field names are different, update those values before deploying.
+
+This repo includes a committed `.anuneko-test-profile` with a pre-authenticated AnuNeko browser session so Railway can start in headless mode without manual login. When that session expires, the headless login refresh above is used as a fallback. To refresh the committed profile locally, log in with `ANUNEKO_BROWSER_HEADLESS=false` and `ANUNEKO_BROWSER_PROFILE_DIR=.anuneko-browser-profile`, then copy that folder to `.anuneko-test-profile` and commit the update.
 
 ## Discord Permissions
 
