@@ -965,6 +965,18 @@ function firstStringDeep(value: unknown, keys: string[]): string | undefined {
   return undefined;
 }
 
+function firstOwnString(value: JsonRecord, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const fieldValue = value[key];
+
+    if (typeof fieldValue === "string" && fieldValue.trim()) {
+      return fieldValue;
+    }
+  }
+
+  return undefined;
+}
+
 function getMessageUrlFromTemplate(
   template: string | undefined,
   chatId: string | undefined,
@@ -1010,7 +1022,8 @@ function unwrapAnuNekoApiData(data: unknown): unknown {
 }
 
 function parseAnuNekoEventStream(text: string): { reply: string; msgId?: string } {
-  let reply = "";
+  let deltaReply = "";
+  let finalReply = "";
   let msgId: string | undefined;
 
   for (const event of parseServerSentEvents(text)) {
@@ -1023,33 +1036,98 @@ function parseAnuNekoEventStream(text: string): { reply: string; msgId?: string 
       throw new AnuNekoError("request_failed", detail);
     }
 
-    if (!isJsonRecord(event.data)) {
+    if (event.data === "[DONE]") {
       continue;
     }
 
-    if (typeof event.data.msg_id === "string" && event.data.msg_id) {
-      msgId = event.data.msg_id;
-    }
+    const data = unwrapStreamEventData(event.data);
 
-    if (event.event !== "delta") {
+    if (!data) {
       continue;
     }
 
-    if (typeof event.data.v === "string") {
-      reply += event.data.v;
+    const eventMsgId = firstStringDeep(data, ["msg_id", "msgId", "message_id", "messageId"]);
+
+    if (eventMsgId) {
+      msgId = eventMsgId;
+    }
+
+    if (event.event === "delta") {
+      deltaReply += extractDeltaText(data);
       continue;
     }
 
-    if (Array.isArray(event.data.c)) {
-      for (const choice of event.data.c) {
-        if (isJsonRecord(choice) && typeof choice.v === "string") {
-          reply += choice.v;
-        }
-      }
+    const eventReply = extractFinalText(data);
+
+    if (eventReply) {
+      finalReply = eventReply;
     }
   }
 
-  return { reply: reply.trim(), msgId };
+  return { reply: (deltaReply || finalReply).trim(), msgId };
+}
+
+function unwrapStreamEventData(data: unknown): unknown | undefined {
+  if (!isJsonRecord(data)) {
+    return typeof data === "string" && data.trim() ? data : undefined;
+  }
+
+  if (typeof data.code === "number") {
+    return unwrapAnuNekoApiData(data);
+  }
+
+  return data;
+}
+
+function extractDeltaText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(extractDeltaText).join("");
+  }
+
+  if (!isJsonRecord(value)) {
+    return "";
+  }
+
+  const directText = firstOwnString(value, [
+    "v",
+    "delta",
+    "content",
+    "text",
+    "text_delta",
+    "textDelta",
+    "content_delta",
+    "contentDelta",
+  ]);
+
+  if (directText) {
+    return directText;
+  }
+
+  return [
+    value.c,
+    value.choices,
+    value.delta,
+    value.data,
+    value.message,
+  ].map(extractDeltaText).join("");
+}
+
+function extractFinalText(value: unknown): string {
+  const directText = firstStringDeep(value, [
+    "reply",
+    "answer",
+    "content",
+    "text",
+    "message",
+    "output",
+    "value",
+  ]);
+
+  return directText ?? "";
 }
 
 function parseServerSentEvents(
