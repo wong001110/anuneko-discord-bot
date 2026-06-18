@@ -2,6 +2,7 @@ import { AnuNekoError, SendMessageInput, SendMessageResult } from "./anuneko.typ
 import type { AnuNekoConfig } from "../config.js";
 import { randomUUID } from "node:crypto";
 import { chromium, type BrowserContext, type Page } from "playwright";
+import { logger } from "../utils/logger.js";
 
 interface AnuNekoServiceOptions {
   config: AnuNekoConfig;
@@ -9,6 +10,19 @@ interface AnuNekoServiceOptions {
 }
 
 type JsonRecord = Record<string, unknown>;
+
+const BROWSER_SESSION_TOKEN_KEYS = [
+  "accessToken",
+  "access_token",
+  "token",
+  "jwt",
+  "idToken",
+  "id_token",
+  "sessionToken",
+  "session_token",
+  "authToken",
+  "auth_token",
+];
 
 interface ChatTransport {
   url: string;
@@ -141,26 +155,9 @@ export class AnuNekoService {
         }
 
         if (this.options.config.mode === "browser" && this.options.config.browserHeadless) {
-          const config = this.options.config;
-
-          if (config.loginUrl && config.loginId && config.password) {
-            const loginData = await this.postJsonWithoutAuth(config.loginUrl, {
-              [config.loginIdField ?? "email"]: config.loginId,
-              [config.passwordField ?? "password"]: config.password,
-            });
-            const token = firstStringDeep(loginData, [
-              "accessToken",
-              "access_token",
-              "token",
-              "jwt",
-              "sessionToken",
-            ]);
-
-            if (token) {
-              await this.injectBrowserSessionToken(token);
-              return operation();
-            }
-          }
+          logger.warn("AnuNeko browser session expired; attempting headless login refresh");
+          await this.refreshHeadlessBrowserSession();
+          return operation();
         }
       }
 
@@ -465,6 +462,41 @@ export class AnuNekoService {
     }, token);
   }
 
+  private async refreshHeadlessBrowserSession(): Promise<string> {
+    if (this.options.config.mode !== "browser") {
+      throw new AnuNekoError("request_failed", "Browser session refresh requested in another mode");
+    }
+
+    const config = this.options.config;
+
+    if (!config.loginUrl || !config.loginId || !config.password) {
+      logger.warn("AnuNeko headless login refresh skipped because login env is incomplete");
+      throw new AnuNekoError(
+        "expired_token",
+        "AnuNeko browser login credentials are not configured",
+      );
+    }
+
+    const loginData = await this.postJsonWithoutAuth(config.loginUrl, {
+      [config.loginIdField ?? "email"]: config.loginId,
+      [config.passwordField ?? "password"]: config.password,
+    });
+    const token = firstStringDeep(loginData, BROWSER_SESSION_TOKEN_KEYS);
+
+    if (!token) {
+      logger.warn("AnuNeko headless login response did not include a recognized token field");
+      throw new AnuNekoError(
+        "invalid_response",
+        "AnuNeko login did not return a browser session token",
+      );
+    }
+
+    await this.injectBrowserSessionToken(token);
+    logger.info("AnuNeko headless browser session refreshed");
+
+    return token;
+  }
+
   private confirmChoice(url: string, token: string, msgId: string): Promise<void> {
     return this.postSessionRequest(url, token, { msg_id: msgId, choice_idx: 0 }, "application/json")
       .then(() => undefined)
@@ -755,10 +787,7 @@ export class AnuNekoService {
     await this.openBrowserLoginPage();
 
     if (this.options.config.browserHeadless) {
-      throw new AnuNekoError(
-        "expired_token",
-        "AnuNeko browser login is required, but the browser is headless",
-      );
+      return this.refreshHeadlessBrowserSession();
     }
 
     if (!this.browserLoginWaitPromise) {
