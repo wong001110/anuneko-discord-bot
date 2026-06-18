@@ -12,6 +12,21 @@ async function main(): Promise<void> {
   const client = createDiscordClient({
     enableMentionReplies: config.enableMentionReplies,
   });
+  let isShuttingDown = false;
+
+  const shutdown = (signal: NodeJS.Signals): void => {
+    if (isShuttingDown) {
+      return;
+    }
+
+    isShuttingDown = true;
+    logger.info(`Received ${signal}; shutting down bot`);
+    client.destroy();
+    process.exitCode = 0;
+  };
+
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
 
   const anunekoService = new AnuNekoService({
     config: config.anuneko,
