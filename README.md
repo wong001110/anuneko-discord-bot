@@ -74,6 +74,11 @@ Railway cannot use the visible manual-login flow, so set:
 ANUNEKO_BROWSER_HEADLESS=true
 ```
 
+This repo includes `railway.json`, which makes Railway run `npm run railway:build`.
+That build downloads Chromium and its Linux dependencies with Playwright before
+`npm run build`. The Railway start command also sets `PLAYWRIGHT_BROWSERS_PATH=0`
+so the bot looks for the browser inside the deployed app instead of `/root/.cache`.
+
 If the AnuNeko browser session expires on Railway, configure login credentials so the bot can refresh the browser session token automatically:
 
 ```env
