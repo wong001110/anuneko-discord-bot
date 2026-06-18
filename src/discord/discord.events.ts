@@ -8,6 +8,7 @@ import {
 import { AnuNekoError } from "../anuneko/anuneko.types.js";
 import { AnuNekoService } from "../anuneko/anuneko.service.js";
 import { AppConfig } from "../config.js";
+import { pickRandomNekoModel } from "./discord.commands.js";
 import { SessionStore } from "../sessions/session.store.js";
 import { CooldownStore } from "../utils/cooldown.js";
 import { logger } from "../utils/logger.js";
@@ -27,7 +28,7 @@ interface HandleNekoMessageInput {
 }
 
 interface BatchedMessage {
-  authorLabel: string;
+  displayName: string;
   content: string;
 }
 
@@ -39,7 +40,9 @@ interface ChannelBatch {
   channelId: string;
 }
 
-export function registerDiscordEvents(dependencies: DiscordEventDependencies): void {
+export function registerDiscordEvents(
+  dependencies: DiscordEventDependencies,
+): void {
   const { client } = dependencies;
   const channelBatches = new Map<string, ChannelBatch>();
 
@@ -86,10 +89,17 @@ async function handleLinkCommand(
     return;
   }
 
-  dependencies.sessions.linkChat(interaction.guildId!, interaction.channelId, chatId);
+  dependencies.sessions.linkChat(
+    interaction.guildId!,
+    interaction.channelId,
+    chatId,
+  );
+
+  const announcement = `${getInteractionUserLabel(interaction)} linked this channel to chat \`${chatId}\`.`;
+  await announceChannelAction(interaction, announcement);
 
   await interaction.reply({
-    content: `Linked this channel to chat \`${chatId}\`.`,
+    content: "Linked this channel to the AnuNeko chat.",
     ephemeral: true,
   });
 }
@@ -105,13 +115,31 @@ async function handleNewSessionCommand(
   await interaction.deferReply({ ephemeral: true });
 
   try {
-    const chatId = await dependencies.anunekoService.createChat();
-    dependencies.sessions.linkChat(interaction.guildId!, interaction.channelId, chatId);
+    const model = pickRandomNekoModel();
+    const chatId = await dependencies.anunekoService.createChat(model);
+    dependencies.sessions.linkChat(
+      interaction.guildId!,
+      interaction.channelId,
+      chatId,
+    );
+    dependencies.sessions.setModel(
+      interaction.guildId!,
+      interaction.channelId,
+      model,
+    );
 
-    await interaction.editReply(`Created and linked a new chat: \`${chatId}\`.`);
+    const announcement = `${getInteractionUserLabel(interaction)} created and linked a new chat (\`${chatId}\`) with **${model}**.`;
+    await announceChannelAction(interaction, announcement);
+
+    await interaction.editReply("Created and linked a new AnuNeko chat.");
   } catch (error) {
     logAnuNekoError(error);
-    await interaction.editReply(getErrorMessage(error));
+    const errorMessage = getErrorMessage(error);
+    await announceChannelAction(
+      interaction,
+      `${getInteractionUserLabel(interaction)} tried to create a new chat, but it failed: ${errorMessage}`,
+    );
+    await interaction.editReply(errorMessage);
   }
 }
 
@@ -138,13 +166,29 @@ async function handleModelCommand(
       await dependencies.anunekoService.updateChatModel(chatId, model);
     }
 
-    dependencies.sessions.linkChat(interaction.guildId!, interaction.channelId, chatId);
-    dependencies.sessions.setModel(interaction.guildId!, interaction.channelId, model);
+    dependencies.sessions.linkChat(
+      interaction.guildId!,
+      interaction.channelId,
+      chatId,
+    );
+    dependencies.sessions.setModel(
+      interaction.guildId!,
+      interaction.channelId,
+      model,
+    );
+
+    const announcement = `${getInteractionUserLabel(interaction)} switched this channel's chat to **${model}**.`;
+    await announceChannelAction(interaction, announcement);
 
     await interaction.editReply(`Switched this channel's chat to **${model}**.`);
   } catch (error) {
     logAnuNekoError(error);
-    await interaction.editReply(getErrorMessage(error));
+    const errorMessage = getErrorMessage(error);
+    await announceChannelAction(
+      interaction,
+      `${getInteractionUserLabel(interaction)} tried to switch the model, but it failed: ${errorMessage}`,
+    );
+    await interaction.editReply(errorMessage);
   }
 }
 
@@ -161,20 +205,29 @@ async function handleChannelMessage(
     return;
   }
 
-  const session = dependencies.sessions.getSession(message.guildId, message.channelId);
+  const session = dependencies.sessions.getSession(
+    message.guildId,
+    message.channelId,
+  );
 
   if (!session.chatId) {
     return;
   }
 
-  const content = resolveMentions(message.content.trim(), message.mentions.users);
+  const content = resolveMentions(
+    message.content.trim(),
+    message.mentions.users,
+  );
   const validationMessage = validateUserMessage(dependencies.config, content);
 
   if (validationMessage) {
     return;
   }
 
-  const cooldownMessage = getCooldownMessage(dependencies.cooldowns, message.author.id);
+  const cooldownMessage = getCooldownMessage(
+    dependencies.cooldowns,
+    message.author.id,
+  );
 
   if (cooldownMessage) {
     return;
@@ -184,7 +237,7 @@ async function handleChannelMessage(
 
   const batchKey = `${message.guildId}:${message.channelId}`;
   const batched: BatchedMessage = {
-    authorLabel: getAuthorLabel(message),
+    displayName: getDisplayName(message),
     content,
   };
 
@@ -225,7 +278,7 @@ async function flushBatch(
   channelBatches.delete(key);
 
   const combined = batch.messages
-    .map((m) => `[${m.authorLabel}]:\n${m.content}`)
+    .map((m) => toAnuNekoMessage(m.displayName, m.content))
     .join("\n\n");
 
   await batch.channelRef.sendTyping();
@@ -251,7 +304,10 @@ async function getAnuNekoReply(
   dependencies: DiscordEventDependencies,
   input: HandleNekoMessageInput,
 ): Promise<string> {
-  const session = dependencies.sessions.getSession(input.guildId, input.channelId);
+  const session = dependencies.sessions.getSession(
+    input.guildId,
+    input.channelId,
+  );
 
   if (!session.chatId) {
     return "This channel is not linked to an AnuNeko chat yet.";
@@ -298,7 +354,10 @@ function getErrorMessage(error: unknown): string {
   return "AnuNeko is not responding right now. Please try again later.";
 }
 
-function validateUserMessage(config: AppConfig, message: string): string | undefined {
+function validateUserMessage(
+  config: AppConfig,
+  message: string,
+): string | undefined {
   if (!message) {
     return "Please include a message for AnuNeko.";
   }
@@ -312,7 +371,8 @@ function validateUserMessage(config: AppConfig, message: string): string | undef
 
 function isAllowedChannel(config: AppConfig, channelId: string): boolean {
   return (
-    config.allowedChannelIds.size === 0 || config.allowedChannelIds.has(channelId)
+    config.allowedChannelIds.size === 0 ||
+    config.allowedChannelIds.has(channelId)
   );
 }
 
@@ -363,14 +423,36 @@ function resolveMentions(
   });
 }
 
-function getAuthorLabel(message: OmitPartialGroupDMChannel<Message>): string {
-  const displayName = message.member?.displayName ?? message.author.displayName;
-  const code =
-    message.author.discriminator && message.author.discriminator !== "0"
-      ? message.author.discriminator
-      : message.author.id;
+function toAnuNekoMessage(displayName: string, message: string): string {
+  return `[${displayName}]:\n${message}`;
+}
 
-  return `${displayName}#${code}`;
+function getDisplayName(message: OmitPartialGroupDMChannel<Message>): string {
+  return message.member?.displayName ?? message.author.displayName;
+}
+
+function getInteractionUserLabel(
+  interaction: ChatInputCommandInteraction,
+): string {
+  const displayName =
+    interaction.member && "displayName" in interaction.member
+      ? interaction.member.displayName
+      : interaction.user.displayName;
+
+  return `**${displayName}**`;
+}
+
+async function announceChannelAction(
+  interaction: ChatInputCommandInteraction,
+  content: string,
+): Promise<void> {
+  const channel = interaction.channel;
+
+  if (!channel?.isSendable()) {
+    return;
+  }
+
+  await channel.send(content);
 }
 
 function logAnuNekoError(error: unknown): void {

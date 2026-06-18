@@ -2,6 +2,20 @@ import { REST, Routes, SlashCommandBuilder } from "discord.js";
 import { AppConfig } from "../config.js";
 import { logger } from "../utils/logger.js";
 
+export const NEKO_MODELS = [
+  "Tuxedo Cat",
+  "Calico Cat",
+  "American Shorthair",
+  "British Shorthair",
+  "Black Cat",
+] as const;
+
+export type NekoModel = (typeof NEKO_MODELS)[number];
+
+export function pickRandomNekoModel(): NekoModel {
+  return NEKO_MODELS[Math.floor(Math.random() * NEKO_MODELS.length)]!;
+}
+
 export const nekoLinkCommand = new SlashCommandBuilder()
   .setName("neko-link")
   .setDescription("Link this channel to an existing AnuNeko chat")
@@ -25,11 +39,7 @@ export const nekoModelCommand = new SlashCommandBuilder()
       .setDescription("Model to use")
       .setRequired(true)
       .addChoices(
-        { name: "Tuxedo Cat", value: "Tuxedo Cat" },
-        { name: "Calico Cat", value: "Calico Cat" },
-        { name: "American Shorthair", value: "American Shorthair" },
-        { name: "British Shorthair", value: "British Shorthair" },
-        { name: "Black Cat", value: "Black Cat" },
+        ...NEKO_MODELS.map((model) => ({ name: model, value: model })),
       ),
   );
 
