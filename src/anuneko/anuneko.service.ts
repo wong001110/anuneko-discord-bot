@@ -40,20 +40,104 @@ export class AnuNekoService {
 
   constructor(private readonly options: AnuNekoServiceOptions) {}
 
+  async createChat(model?: string): Promise<string> {
+    return this.withExpiredSessionRecovery(() => this.createChatOnce(model));
+  }
+
+  async updateChatModel(chatId: string, model: string): Promise<void> {
+    await this.withExpiredSessionRecovery(() => this.updateChatModelOnce(chatId, model));
+  }
+
   async sendMessage(input: SendMessageInput): Promise<SendMessageResult> {
+    return this.withExpiredSessionRecovery(() => this.sendMessageOnce(input));
+  }
+
+  private async createChatOnce(model?: string): Promise<string> {
+    if (this.options.config.mode === "session") {
+      const chatId = await this.createSessionChat();
+
+      if (model) {
+        await this.updateChatModel(chatId, model);
+      }
+
+      return chatId;
+    }
+
+    if (this.options.config.mode === "browser") {
+      const chatId = await this.createBrowserChat();
+
+      if (model) {
+        await this.updateChatModel(chatId, model);
+      }
+
+      return chatId;
+    }
+
+    if (this.options.config.mode === "auto") {
+      if (model) {
+        throw new AnuNekoError(
+          "request_failed",
+          "Changing models is not supported in auto mode",
+        );
+      }
+
+      this.autoChat = await this.createAutoChat();
+
+      if (!this.autoChat.chatId) {
+        throw new AnuNekoError("invalid_response", "AnuNeko chat creation did not return a chat ID");
+      }
+
+      return this.autoChat.chatId;
+    }
+
+    throw new AnuNekoError(
+      "request_failed",
+      "Creating chats is not supported in direct mode",
+    );
+  }
+
+  private async updateChatModelOnce(chatId: string, model: string): Promise<void> {
+    if (this.options.config.mode === "session") {
+      await this.postSessionRequest(
+        getAnuNekoApiUrl(this.options.config.baseUrl, "/api/v1/user/select_model"),
+        this.options.config.sessionToken,
+        { chat_id: chatId, model },
+        "application/json",
+      );
+      return;
+    }
+
+    if (this.options.config.mode === "browser") {
+      await this.postBrowserRequest(
+        getAnuNekoApiUrl(this.options.config.baseUrl, "/api/v1/user/select_model"),
+        { chat_id: chatId, model },
+        "application/json",
+      );
+      return;
+    }
+
+    throw new AnuNekoError(
+      "request_failed",
+      `Changing models is not supported in ${this.options.config.mode} mode`,
+    );
+  }
+
+  private async withExpiredSessionRecovery<T>(
+    operation: () => Promise<T>,
+  ): Promise<T> {
     try {
-      return await this.sendMessageOnce(input);
+      return await operation();
     } catch (error) {
       if (error instanceof AnuNekoError && error.code === "expired_token") {
         if (this.options.config.mode === "auto") {
           this.autoChat = undefined;
-          return this.sendMessageOnce(input);
+          return operation();
         }
 
         if (this.options.config.mode === "browser" && !this.options.config.browserHeadless) {
           const page = await this.getBrowserPage();
           await this.waitForBrowserLogin(page);
-          return this.sendMessageOnce(input);
+          return operation();
         }
 
         if (this.options.config.mode === "browser" && this.options.config.browserHeadless) {
@@ -74,7 +158,7 @@ export class AnuNekoService {
 
             if (token) {
               await this.injectBrowserSessionToken(token);
-              return this.sendMessageOnce(input);
+              return operation();
             }
           }
         }

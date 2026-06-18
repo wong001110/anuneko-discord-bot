@@ -5,7 +5,7 @@ import {
   Message,
   OmitPartialGroupDMChannel,
 } from "discord.js";
-import { AnuNekoError, SendMessageResult } from "../anuneko/anuneko.types.js";
+import { AnuNekoError } from "../anuneko/anuneko.types.js";
 import { AnuNekoService } from "../anuneko/anuneko.service.js";
 import { AppConfig } from "../config.js";
 import { SessionStore } from "../sessions/session.store.js";
@@ -23,14 +23,11 @@ interface DiscordEventDependencies {
 interface HandleNekoMessageInput {
   guildId: string;
   channelId: string;
-  userId: string;
-  username: string;
   message: string;
 }
 
 interface BatchedMessage {
-  userId: string;
-  username: string;
+  authorLabel: string;
   content: string;
 }
 
@@ -55,8 +52,8 @@ export function registerDiscordEvents(dependencies: DiscordEventDependencies): v
       return;
     }
 
-    if (interaction.commandName === "neko") {
-      await handleSlashCommand(dependencies, interaction);
+    if (interaction.commandName === "neko-link") {
+      await handleLinkCommand(dependencies, interaction);
     } else if (interaction.commandName === "neko-new") {
       await handleNewSessionCommand(dependencies, interaction);
     } else if (interaction.commandName === "neko-model") {
@@ -71,104 +68,84 @@ export function registerDiscordEvents(dependencies: DiscordEventDependencies): v
   }
 }
 
-async function handleSlashCommand(
+async function handleLinkCommand(
   dependencies: DiscordEventDependencies,
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
-  if (!interaction.guildId) {
+  if (!(await ensureCommandChannel(dependencies, interaction))) {
+    return;
+  }
+
+  const chatId = interaction.options.getString("chat-id", true).trim();
+
+  if (!chatId) {
     await interaction.reply({
-      content: "Please use this command inside a server.",
+      content: "Please include an AnuNeko chat ID.",
       ephemeral: true,
     });
     return;
   }
 
-  if (!isAllowedChannel(dependencies.config, interaction.channelId)) {
-    await interaction.reply({
-      content: "This bot is not enabled in this channel.",
-      ephemeral: true,
-    });
-    return;
-  }
+  dependencies.sessions.linkChat(interaction.guildId!, interaction.channelId, chatId);
 
-  const message = interaction.options.getString("message", true).trim();
-  const validationMessage = validateUserMessage(dependencies.config, message);
-
-  if (validationMessage) {
-    await interaction.reply({
-      content: validationMessage,
-      ephemeral: true,
-    });
-    return;
-  }
-
-  const cooldownMessage = getCooldownMessage(
-    dependencies.cooldowns,
-    interaction.user.id,
-  );
-
-  if (cooldownMessage) {
-    await interaction.reply({
-      content: cooldownMessage,
-      ephemeral: true,
-    });
-    return;
-  }
-
-  await interaction.deferReply();
-
-  const reply = await getAnuNekoReply(dependencies, {
-    guildId: interaction.guildId,
-    channelId: interaction.channelId,
-    userId: interaction.user.id,
-    username: interaction.user.username,
-    message: `[${interaction.user.username}]: ${message}`,
+  await interaction.reply({
+    content: `Linked this channel to chat \`${chatId}\`.`,
+    ephemeral: true,
   });
-
-  dependencies.cooldowns.markUsed(interaction.user.id);
-  await interaction.editReply(reply.text);
 }
 
 async function handleNewSessionCommand(
   dependencies: DiscordEventDependencies,
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
-  if (!interaction.guildId) {
-    await interaction.reply({
-      content: "Please use this command inside a server.",
-      ephemeral: true,
-    });
+  if (!(await ensureCommandChannel(dependencies, interaction))) {
     return;
   }
 
-  dependencies.sessions.clearSession(interaction.guildId, interaction.channelId, interaction.user.id);
+  await interaction.deferReply({ ephemeral: true });
 
-  await interaction.reply({
-    content: "Started a new conversation.",
-    ephemeral: true,
-  });
+  try {
+    const chatId = await dependencies.anunekoService.createChat();
+    dependencies.sessions.linkChat(interaction.guildId!, interaction.channelId, chatId);
+
+    await interaction.editReply(`Created and linked a new chat: \`${chatId}\`.`);
+  } catch (error) {
+    logAnuNekoError(error);
+    await interaction.editReply(getErrorMessage(error));
+  }
 }
 
 async function handleModelCommand(
   dependencies: DiscordEventDependencies,
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
-  if (!interaction.guildId) {
-    await interaction.reply({
-      content: "Please use this command inside a server.",
-      ephemeral: true,
-    });
+  if (!(await ensureCommandChannel(dependencies, interaction))) {
     return;
   }
 
   const model = interaction.options.getString("model", true);
+  await interaction.deferReply({ ephemeral: true });
 
-  dependencies.sessions.setModel(interaction.guildId, interaction.channelId, interaction.user.id, model);
+  try {
+    const session = dependencies.sessions.getSession(
+      interaction.guildId!,
+      interaction.channelId,
+    );
+    const chatId =
+      session.chatId ?? (await dependencies.anunekoService.createChat(model));
 
-  await interaction.reply({
-    content: `Switched to **${model}**. A new conversation will start with your next message.`,
-    ephemeral: true,
-  });
+    if (session.chatId) {
+      await dependencies.anunekoService.updateChatModel(chatId, model);
+    }
+
+    dependencies.sessions.linkChat(interaction.guildId!, interaction.channelId, chatId);
+    dependencies.sessions.setModel(interaction.guildId!, interaction.channelId, model);
+
+    await interaction.editReply(`Switched this channel's chat to **${model}**.`);
+  } catch (error) {
+    logAnuNekoError(error);
+    await interaction.editReply(getErrorMessage(error));
+  }
 }
 
 async function handleChannelMessage(
@@ -181,6 +158,12 @@ async function handleChannelMessage(
   }
 
   if (!isAllowedChannel(dependencies.config, message.channelId)) {
+    return;
+  }
+
+  const session = dependencies.sessions.getSession(message.guildId, message.channelId);
+
+  if (!session.chatId) {
     return;
   }
 
@@ -201,8 +184,7 @@ async function handleChannelMessage(
 
   const batchKey = `${message.guildId}:${message.channelId}`;
   const batched: BatchedMessage = {
-    userId: message.author.id,
-    username: message.author.username,
+    authorLabel: getAuthorLabel(message),
     content,
   };
 
@@ -243,10 +225,8 @@ async function flushBatch(
   channelBatches.delete(key);
 
   const combined = batch.messages
-    .map((m) => `[${m.username}]: ${m.content}`)
-    .join("\n");
-
-  const firstMsg = batch.messages[0];
+    .map((m) => `[${m.authorLabel}]:\n${m.content}`)
+    .join("\n\n");
 
   await batch.channelRef.sendTyping();
   const typingInterval = setInterval(
@@ -258,12 +238,10 @@ async function flushBatch(
     const reply = await getAnuNekoReply(dependencies, {
       guildId: batch.guildId,
       channelId: batch.channelId,
-      userId: firstMsg.userId,
-      username: firstMsg.username,
       message: combined,
     });
 
-    await batch.channelRef.send(reply.text);
+    await batch.channelRef.send(reply);
   } finally {
     clearInterval(typingInterval);
   }
@@ -272,32 +250,28 @@ async function flushBatch(
 async function getAnuNekoReply(
   dependencies: DiscordEventDependencies,
   input: HandleNekoMessageInput,
-): Promise<SendMessageResult> {
-  const session = dependencies.sessions.getSession(
-    input.guildId,
-    input.channelId,
-    input.userId,
-  );
+): Promise<string> {
+  const session = dependencies.sessions.getSession(input.guildId, input.channelId);
+
+  if (!session.chatId) {
+    return "This channel is not linked to an AnuNeko chat yet.";
+  }
 
   try {
     const result = await dependencies.anunekoService.sendMessage({
       message: input.message,
       chatId: session.chatId,
-      model: session.model,
     });
 
-    dependencies.sessions.updateSession(input.guildId, input.channelId, input.userId, {
+    dependencies.sessions.updateSession(input.guildId, input.channelId, {
       chatId: result.chatId ?? session.chatId,
       lastMessageAt: Date.now(),
     });
 
-    return result;
+    return result.text;
   } catch (error) {
     logAnuNekoError(error);
-    return {
-      text: getErrorMessage(error),
-      chatId: session.chatId,
-    };
+    return getErrorMessage(error);
   }
 }
 
@@ -310,6 +284,12 @@ function getErrorMessage(error: unknown): string {
         return "AnuNeko took too long to respond. Please try again.";
       case "expired_token":
         return "AnuNeko session has expired. The bot will reconnect automatically.";
+      case "request_failed":
+        if (error.message.includes("not supported")) {
+          return error.message;
+        }
+
+        return "AnuNeko is not responding right now. Please try again later.";
       default:
         return "AnuNeko is not responding right now. Please try again later.";
     }
@@ -336,6 +316,29 @@ function isAllowedChannel(config: AppConfig, channelId: string): boolean {
   );
 }
 
+async function ensureCommandChannel(
+  dependencies: DiscordEventDependencies,
+  interaction: ChatInputCommandInteraction,
+): Promise<boolean> {
+  if (!interaction.guildId) {
+    await interaction.reply({
+      content: "Please use this command inside a server.",
+      ephemeral: true,
+    });
+    return false;
+  }
+
+  if (!isAllowedChannel(dependencies.config, interaction.channelId)) {
+    await interaction.reply({
+      content: "This bot is not enabled in this channel.",
+      ephemeral: true,
+    });
+    return false;
+  }
+
+  return true;
+}
+
 function getCooldownMessage(
   cooldowns: CooldownStore,
   userId: string,
@@ -358,6 +361,16 @@ function resolveMentions(
     const user = mentionedUsers.get(userId);
     return user ? `@${user.username}` : match;
   });
+}
+
+function getAuthorLabel(message: OmitPartialGroupDMChannel<Message>): string {
+  const displayName = message.member?.displayName ?? message.author.displayName;
+  const code =
+    message.author.discriminator && message.author.discriminator !== "0"
+      ? message.author.discriminator
+      : message.author.id;
+
+  return `${displayName}#${code}`;
 }
 
 function logAnuNekoError(error: unknown): void {

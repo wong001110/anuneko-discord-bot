@@ -7,8 +7,8 @@ export interface ChatSession {
 export class SessionStore {
   private readonly sessions = new Map<string, ChatSession>();
 
-  getSession(guildId: string, channelId: string, userId: string): ChatSession {
-    const key = this.getSessionKey(guildId, channelId, userId);
+  getSession(guildId: string, channelId: string): ChatSession {
+    const key = this.getSessionKey(guildId, channelId);
     const existingSession = this.sessions.get(key);
 
     if (existingSession) {
@@ -26,33 +26,30 @@ export class SessionStore {
   updateSession(
     guildId: string,
     channelId: string,
-    userId: string,
     changes: Partial<ChatSession>,
   ): ChatSession {
-    const session = this.getSession(guildId, channelId, userId);
+    const session = this.getSession(guildId, channelId);
     const updatedSession = {
       ...session,
       ...changes,
     };
 
-    this.sessions.set(this.getSessionKey(guildId, channelId, userId), updatedSession);
+    this.sessions.set(this.getSessionKey(guildId, channelId), updatedSession);
     return updatedSession;
   }
 
-  clearSession(guildId: string, channelId: string, userId: string): void {
-    const key = this.getSessionKey(guildId, channelId, userId);
-    const existing = this.sessions.get(key);
-
-    if (existing) {
-      this.sessions.set(key, { lastMessageAt: existing.lastMessageAt, model: existing.model });
-    }
+  linkChat(guildId: string, channelId: string, chatId: string): ChatSession {
+    return this.updateSession(guildId, channelId, {
+      chatId,
+      lastMessageAt: Date.now(),
+    });
   }
 
-  setModel(guildId: string, channelId: string, userId: string, model: string): void {
-    this.updateSession(guildId, channelId, userId, { chatId: undefined, model });
+  setModel(guildId: string, channelId: string, model: string): ChatSession {
+    return this.updateSession(guildId, channelId, { model });
   }
 
-  private getSessionKey(guildId: string, channelId: string, _userId: string): string {
+  private getSessionKey(guildId: string, channelId: string): string {
     return `${guildId}:${channelId}`;
   }
 }
