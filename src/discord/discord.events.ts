@@ -115,7 +115,8 @@ async function handleNewSessionCommand(
   await interaction.deferReply({ ephemeral: true });
 
   try {
-    const model = pickRandomNekoModel();
+    const model =
+      interaction.options.getString("model") ?? pickRandomNekoModel();
     const chatId = await dependencies.anunekoService.createChat(model);
     dependencies.sessions.linkChat(
       interaction.guildId!,

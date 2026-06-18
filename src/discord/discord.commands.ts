@@ -28,7 +28,16 @@ export const nekoLinkCommand = new SlashCommandBuilder()
 
 export const nekoNewCommand = new SlashCommandBuilder()
   .setName("neko-new")
-  .setDescription("Create and link a fresh AnuNeko chat to this channel");
+  .setDescription("Create and link a fresh AnuNeko chat to this channel")
+  .addStringOption((option) =>
+    option
+      .setName("model")
+      .setDescription("Cat model to use (random if omitted)")
+      .setRequired(false)
+      .addChoices(
+        ...NEKO_MODELS.map((model) => ({ name: model, value: model })),
+      ),
+  );
 
 export const nekoModelCommand = new SlashCommandBuilder()
   .setName("neko-model")

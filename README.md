@@ -5,7 +5,7 @@ Private Discord bot that links Discord channels to AnuNeko browser-mode chats an
 ## Features
 
 - `/neko-link` links the current Discord channel to an existing AnuNeko chat ID.
-- `/neko-new` creates a fresh AnuNeko chat and links it to the current channel. A random cat model is selected automatically.
+- `/neko-new` creates a fresh AnuNeko chat and links it to the current channel. A random cat model is selected by default; you can also pick one with the optional `model` option.
 - `/neko-model` switches the model for the current channel's linked chat.
 - Normal channel messages are sent to AnuNeko only after the channel is linked.
 - Channel-to-chat links are stored in memory and reset when the bot restarts.
@@ -106,5 +106,5 @@ The bot needs permission to:
 Channel chat links are in memory only. If the bot restarts, use `/neko-link` or `/neko-new` again in each channel that should talk to AnuNeko.
 
 - `/neko-link chat-id:<id>` links the current channel to an existing AnuNeko chat ID. The bot stores the ID without validating it until the next channel message uses it.
-- `/neko-new` creates a new AnuNeko chat immediately and links it to the current channel. If the channel was already linked, the new chat replaces the old link. A random cat model is selected automatically.
+- `/neko-new` creates a new AnuNeko chat immediately and links it to the current channel. If the channel was already linked, the new chat replaces the old link. A random cat model is selected by default; use the optional `model` option to pick one.
 - `/neko-model model:<model>` changes the model for the current channel's linked chat. If the channel is not linked yet, the bot creates and links a new chat first, then applies the selected model.
