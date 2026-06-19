@@ -215,9 +215,11 @@ async function handleChannelMessage(
     return;
   }
 
-  const content = resolveMentions(
-    message.content.trim(),
-    message.mentions.users,
+  const content = sanitizeUserMessage(
+    resolveMentions(
+      message.content.trim(),
+      message.mentions.users,
+    ),
   );
   const validationMessage = validateUserMessage(dependencies.config, content);
 
@@ -422,6 +424,13 @@ function resolveMentions(
     const user = mentionedUsers.get(userId);
     return user ? `@${user.username}` : match;
   });
+}
+
+function sanitizeUserMessage(content: string): string {
+  return content
+    .replace(/<(?:a:|:)?[\w-]{2,}:\d+>/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
 }
 
 function toAnuNekoMessage(displayName: string, message: string): string {
