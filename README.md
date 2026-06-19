@@ -9,7 +9,8 @@ Private Discord bot that links Discord channels to AnuNeko browser-mode chats an
 - `/neko-model` switches the model for the current channel's linked chat.
 - Normal channel messages are sent to AnuNeko only after the channel is linked.
 - Channel-to-chat links are stored in memory and reset when the bot restarts.
-- Message batching keeps quick consecutive Discord messages together.
+- Message batching keeps quick consecutive Discord messages together per channel.
+- Each channel queues messages independently so valid messages are gathered instead of dropped while AnuNeko is replying.
 
 Messages sent to AnuNeko use this format:
 
@@ -45,7 +46,6 @@ ANUNEKO_CREATE_CHAT_BODY={"is_chose_persona":false}
 
 BOT_ALLOWED_CHANNEL_IDS=
 BOT_ENABLE_MENTION_REPLIES=true
-BOT_COOLDOWN_MS=7000
 BOT_DEBOUNCE_MS=2000
 BOT_MAX_MESSAGE_LENGTH=500
 ANUNEKO_TIMEOUT_MS=30000

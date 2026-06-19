@@ -6,7 +6,6 @@ export interface AppConfig {
   anuneko: AnuNekoConfig;
   allowedChannelIds: Set<string>;
   enableMentionReplies: boolean;
-  cooldownMs: number;
   maxMessageLength: number;
   anunekoTimeoutMs: number;
   debounceMs: number;
@@ -56,7 +55,6 @@ export interface BrowserAnuNekoConfig {
   passwordField?: string;
 }
 
-const DEFAULT_COOLDOWN_MS = 7_000;
 const DEFAULT_MAX_MESSAGE_LENGTH = 500;
 const DEFAULT_ANUNEKO_TIMEOUT_MS = 30_000;
 const DEFAULT_DEBOUNCE_MS = 2_000;
@@ -204,7 +202,6 @@ export function loadConfig(): AppConfig {
       "BOT_ENABLE_MENTION_REPLIES",
       false,
     ),
-    cooldownMs: getOptionalNumberEnv("BOT_COOLDOWN_MS", DEFAULT_COOLDOWN_MS),
     debounceMs: getOptionalNumberEnv("BOT_DEBOUNCE_MS", DEFAULT_DEBOUNCE_MS),
     maxMessageLength: getOptionalNumberEnv(
       "BOT_MAX_MESSAGE_LENGTH",

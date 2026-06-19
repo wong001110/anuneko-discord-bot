@@ -4,7 +4,6 @@ import { createDiscordClient } from "./discord/discord.client.js";
 import { registerDiscordCommands } from "./discord/discord.commands.js";
 import { registerDiscordEvents } from "./discord/discord.events.js";
 import { SessionStore } from "./sessions/session.store.js";
-import { CooldownStore } from "./utils/cooldown.js";
 import { logger } from "./utils/logger.js";
 
 async function main(): Promise<void> {
@@ -40,7 +39,6 @@ async function main(): Promise<void> {
     config,
     anunekoService,
     sessions: new SessionStore(),
-    cooldowns: new CooldownStore(config.cooldownMs),
   });
 
   await registerDiscordCommands(config);
@@ -58,7 +56,6 @@ function getStartupConfigLog(config: AppConfig): Record<string, unknown> {
     discordBotTokenConfigured: Boolean(config.discordBotToken),
     allowedChannelCount: config.allowedChannelIds.size,
     enableMentionReplies: config.enableMentionReplies,
-    cooldownMs: config.cooldownMs,
     debounceMs: config.debounceMs,
     maxMessageLength: config.maxMessageLength,
     anunekoTimeoutMs: config.anunekoTimeoutMs,

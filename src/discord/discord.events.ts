@@ -10,7 +10,6 @@ import { AnuNekoService } from "../anuneko/anuneko.service.js";
 import { AppConfig } from "../config.js";
 import { pickRandomNekoModel } from "./discord.commands.js";
 import { SessionStore } from "../sessions/session.store.js";
-import { CooldownStore } from "../utils/cooldown.js";
 import { logger } from "../utils/logger.js";
 
 interface DiscordEventDependencies {
@@ -18,7 +17,6 @@ interface DiscordEventDependencies {
   config: AppConfig;
   anunekoService: AnuNekoService;
   sessions: SessionStore;
-  cooldowns: CooldownStore;
 }
 
 interface HandleNekoMessageInput {
@@ -32,9 +30,10 @@ interface BatchedMessage {
   content: string;
 }
 
-interface ChannelBatch {
+interface ChannelQueue {
   messages: BatchedMessage[];
-  timer: ReturnType<typeof setTimeout>;
+  timer?: ReturnType<typeof setTimeout>;
+  isSending: boolean;
   channelRef: OmitPartialGroupDMChannel<Message>["channel"];
   guildId: string;
   channelId: string;
@@ -44,7 +43,7 @@ export function registerDiscordEvents(
   dependencies: DiscordEventDependencies,
 ): void {
   const { client } = dependencies;
-  const channelBatches = new Map<string, ChannelBatch>();
+  const channelQueues = new Map<string, ChannelQueue>();
 
   client.once(Events.ClientReady, (readyClient) => {
     logger.info(`Logged in as ${readyClient.user.tag}`);
@@ -66,7 +65,7 @@ export function registerDiscordEvents(
 
   if (dependencies.config.enableMentionReplies) {
     client.on(Events.MessageCreate, async (message) => {
-      await handleChannelMessage(dependencies, message, channelBatches);
+      await handleChannelMessage(dependencies, message, channelQueues);
     });
   }
 }
@@ -196,7 +195,7 @@ async function handleModelCommand(
 async function handleChannelMessage(
   dependencies: DiscordEventDependencies,
   message: OmitPartialGroupDMChannel<Message>,
-  channelBatches: Map<string, ChannelBatch>,
+  channelQueues: Map<string, ChannelQueue>,
 ): Promise<void> {
   if (message.author.bot || !message.guildId) {
     return;
@@ -227,77 +226,116 @@ async function handleChannelMessage(
     return;
   }
 
-  const cooldownMessage = getCooldownMessage(
-    dependencies.cooldowns,
-    message.author.id,
-  );
-
-  if (cooldownMessage) {
-    return;
-  }
-
-  dependencies.cooldowns.markUsed(message.author.id);
-
-  const batchKey = `${message.guildId}:${message.channelId}`;
+  const queueKey = `${message.guildId}:${message.channelId}`;
   const batched: BatchedMessage = {
     displayName: getDisplayName(message),
     content,
   };
 
-  const existing = channelBatches.get(batchKey);
+  const existing = channelQueues.get(queueKey);
 
   if (existing) {
-    clearTimeout(existing.timer);
     existing.messages.push(batched);
-    existing.timer = setTimeout(
-      () => void flushBatch(batchKey, channelBatches, dependencies),
-      dependencies.config.debounceMs,
-    );
+    scheduleChannelQueue(queueKey, existing, channelQueues, dependencies);
   } else {
-    channelBatches.set(batchKey, {
+    const queue: ChannelQueue = {
       messages: [batched],
-      timer: setTimeout(
-        () => void flushBatch(batchKey, channelBatches, dependencies),
-        dependencies.config.debounceMs,
-      ),
+      isSending: false,
       channelRef: message.channel,
       guildId: message.guildId,
       channelId: message.channelId,
-    });
+    };
+
+    channelQueues.set(queueKey, queue);
+    scheduleChannelQueue(queueKey, queue, channelQueues, dependencies);
   }
 }
 
-async function flushBatch(
+function scheduleChannelQueue(
   key: string,
-  channelBatches: Map<string, ChannelBatch>,
+  queue: ChannelQueue,
+  channelQueues: Map<string, ChannelQueue>,
+  dependencies: DiscordEventDependencies,
+): void {
+  if (queue.timer) {
+    clearTimeout(queue.timer);
+  }
+
+  queue.timer = setTimeout(
+    () => void flushChannelQueue(key, channelQueues, dependencies),
+    dependencies.config.debounceMs,
+  );
+}
+
+async function flushChannelQueue(
+  key: string,
+  channelQueues: Map<string, ChannelQueue>,
   dependencies: DiscordEventDependencies,
 ): Promise<void> {
-  const batch = channelBatches.get(key);
+  const queue = channelQueues.get(key);
 
-  if (!batch) {
+  if (!queue || queue.isSending) {
     return;
   }
 
-  channelBatches.delete(key);
+  if (queue.timer) {
+    clearTimeout(queue.timer);
+    queue.timer = undefined;
+  }
 
-  const combined = batch.messages
-    .map((m) => toAnuNekoMessage(m.displayName, m.content))
+  if (queue.messages.length === 0) {
+    channelQueues.delete(key);
+    return;
+  }
+
+  queue.isSending = true;
+
+  try {
+    while (queue.messages.length > 0) {
+      const messages = queue.messages;
+      queue.messages = [];
+
+      await sendQueuedMessages(queue, messages, dependencies);
+
+      if (queue.messages.length > 0) {
+        scheduleChannelQueue(key, queue, channelQueues, dependencies);
+        return;
+      }
+    }
+  } finally {
+    queue.isSending = false;
+
+    if (queue.messages.length > 0) {
+      scheduleChannelQueue(key, queue, channelQueues, dependencies);
+    } else if (!queue.timer) {
+      channelQueues.delete(key);
+    }
+  }
+}
+
+async function sendQueuedMessages(
+  queue: ChannelQueue,
+  messages: BatchedMessage[],
+  dependencies: DiscordEventDependencies,
+): Promise<void> {
+  const combined = messages
+    .map((message) => toAnuNekoMessage(message.displayName, message.content))
     .join("\n\n");
 
-  await batch.channelRef.sendTyping();
+  await queue.channelRef.sendTyping();
   const typingInterval = setInterval(
-    () => void batch.channelRef.sendTyping(),
+    () => void queue.channelRef.sendTyping(),
     8_000,
   );
 
   try {
     const reply = await getAnuNekoReply(dependencies, {
-      guildId: batch.guildId,
-      channelId: batch.channelId,
+      guildId: queue.guildId,
+      channelId: queue.channelId,
       message: combined,
     });
 
-    await batch.channelRef.send(reply);
+    await queue.channelRef.send(reply);
   } finally {
     clearInterval(typingInterval);
   }
@@ -400,20 +438,6 @@ async function ensureCommandChannel(
   }
 
   return true;
-}
-
-function getCooldownMessage(
-  cooldowns: CooldownStore,
-  userId: string,
-): string | undefined {
-  const remainingMs = cooldowns.getRemainingMs(userId);
-
-  if (remainingMs === 0) {
-    return undefined;
-  }
-
-  const remainingSeconds = Math.ceil(remainingMs / 1_000);
-  return `Please wait ${remainingSeconds}s before sending another message.`;
 }
 
 function resolveMentions(
